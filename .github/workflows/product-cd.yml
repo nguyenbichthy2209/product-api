@@ -9,9 +9,19 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: product-api-production
+  cancel-in-progress: false
+
 jobs:
   build-and-push:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
 
     steps:
@@ -35,3 +45,53 @@ jobs:
           context: .
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/product-api:latest
+
+  deploy-local:
+    needs: build-and-push
+    runs-on: [self-hosted, Windows, X64, product-api-local]
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - name: Checkout tested source code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Check Docker Engine
+        run: |
+          docker info
+          if ($LASTEXITCODE -ne 0) {
+            throw "Docker Engine is not available"
+          }
+
+      - name: Pull new Product API image
+        run: |
+          docker compose -p product-api-prod -f docker-compose-prod.yaml pull product-api
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to pull Product API image"
+          }
+
+      - name: Deploy and wait for healthy containers
+        run: |
+          docker compose -p product-api-prod -f docker-compose-prod.yaml up -d --wait --wait-timeout 180
+          if ($LASTEXITCODE -ne 0) {
+            throw "Deployment failed or containers are unhealthy"
+          }
+
+      - name: Verify API health
+        run: |
+          $response = Invoke-RestMethod -Uri "http://localhost:3000/health" -TimeoutSec 15
+          $response | ConvertTo-Json
+          if ($response.status -ne "OK") {
+            throw "API healthcheck failed"
+          }
+
+      - name: Show deployment status
+        if: always()
+        run: |
+          docker compose -p product-api-prod -f docker-compose-prod.yaml ps
+          docker compose -p product-api-prod -f docker-compose-prod.yaml logs --tail 50
