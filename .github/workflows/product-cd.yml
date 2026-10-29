@@ -84,7 +84,7 @@ jobs:
 
       - name: Verify API health
         run: |
-          $response = Invoke-RestMethod -Uri "http://localhost:3000/health" -TimeoutSec 15
+          $response = Invoke-RestMethod -Uri "http://localhost:3003/health" -TimeoutSec 15
           $response | ConvertTo-Json
           if ($response.status -ne "OK") {
             throw "API healthcheck failed"
