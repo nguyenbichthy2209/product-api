@@ -45,5 +45,34 @@ jobs:
           context: .
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/product-api:latest
+  deploy-local:
+    needs: build-and-push
+    runs-on: [self-hosted, Windows, X64, product-api-local]
+    timeout-minutes: 10
 
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Pull latest API image
+        run: |
+          docker compose -p product-api-prod -f docker-compose-prod.yaml pull product-api
+          if ($LASTEXITCODE -ne 0) { throw "Pull failed" }
+
+      - name: Deploy and check containers
+        run: |
+          docker compose -p product-api-prod -f docker-compose-prod.yaml up -d --wait --wait-timeout 180
+          if ($LASTEXITCODE -ne 0) { throw "Deployment failed" }
+
+      - name: Verify API health
+        run: |
+          $result = Invoke-RestMethod "http://localhost:3003/health" -TimeoutSec 15
+          if ($result.status -ne "OK") { throw "Healthcheck failed" }
+          $result | ConvertTo-Json
   
